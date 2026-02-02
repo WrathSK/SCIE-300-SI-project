@@ -3,6 +3,9 @@ library(readr)
 library(stringr)
 library(ggplot2)
 library(rstatix)
+library(tidyr)
+
+# List all csv files
 
 files <- list.files(
   path = "Raw Data",
@@ -10,143 +13,100 @@ files <- list.files(
   recursive = TRUE,
   full.names = TRUE
 )
-length(files)
-head(files, 5)
 
-# Read the file
+# Read one csv and standardize key columns
 
 read_one <- function(f) {
-  
   df <- read_csv(f, show_col_types = FALSE)
+  if ("Detail" %in% names(df)) df$Detail <- as.character(df$Detail)
   
-  subject <- str_extract(f, "CHEM|MATH")
-  period  <- str_extract(f, "Pre-COVID|Post-COVID|2017-2019|2022-2024")
+  term_label <- basename(dirname(f))
+  Subject_std <- str_match(basename(f), "^[^-]+-[^-]+-([A-Z]{3,5})\\.csv$")[,2]
+  Year <- as.integer(str_sub(term_label, 1, 4))
+  Session <- str_sub(term_label, 5, 5)
+  
+  dist_cols <- grep("^<|^\\d+-\\d+", names(df), value = TRUE)
+  bin_sum <- if (length(dist_cols) > 0) rowSums(df[, dist_cols, drop = FALSE], na.rm = TRUE) else rep(NA_real_, nrow(df))
+  
+  # Check weight
+  weight_raw <- rep(NA_real_, nrow(df))
+  if ("Reported" %in% names(df)) {
+    weight_raw <- suppressWarnings(as.numeric(df$Reported))
+  } else if ("Enrolled" %in% names(df)) {
+    weight_raw <- suppressWarnings(as.numeric(df$Enrolled))
+  }
+  weight <- ifelse(is.na(weight_raw), bin_sum, weight_raw)
   
   df %>%
-    mutate(
+    transmute(
+      term_label,
+      Year,
+      Session,
+      Subject_std,
+      Course = as.character(Course),
       Section = as.character(Section),
-      Course  = as.character(Course),
-      subject = subject,
-      period  = period,
+      Avg = suppressWarnings(as.numeric(Avg)),
+      weight_raw,
+      weight,
       source_file = basename(f)
     )
 }
 
 df_all <- bind_rows(lapply(files, read_one))
 
-# Remove 100-level course
+# Clean up data and calculate weighted average
 
-df_all_2xx <- df_all %>%
-  filter(!str_starts(Course, "1"))
+# Remove 100 level courses
 
-# Count professors
+df_all_2xx <- df_all %>% filter(!str_starts(Course, "1"))
 
-df_all_2xx %>%
-  group_by(subject) %>%
-  summarise(n_professor = n_distinct(Professor))
-
-# Sum reported
-
-dist_cols <- grep("^<|^\\d+-\\d+", names(df_all_2xx), value = TRUE)
-
-df_all_2xx <- df_all_2xx %>%
-  mutate(
-    Reported = if_else(
-      is.na(Reported),
-      rowSums(across(all_of(dist_cols)), na.rm = TRUE),
-      Reported
-    )
-  )
-
-# Calculate weighted avg
-
-df_tmp <- df_all_2xx %>%
-  mutate(
-    Reported = as.numeric(Reported),
-    Avg      = as.numeric(Avg),
-    Section  = as.character(Section),
-    is_overall = (Section == "OVERALL")
-  )
-
-courses_with_overall <- df_tmp %>%
-  group_by(Year, Session, Subject, Course) %>%
-  summarise(has_overall = any(is_overall), .groups = "drop")
-
-overall_rows <- df_tmp %>%
-  filter(is_overall) %>%
-  group_by(Year, Session, Subject, Course) %>%
+df_course_term <- df_all_2xx %>%
+  mutate(is_overall = (Section == "OVERALL")) %>%
+  group_by(Year, Session, Subject_std, Course) %>%
   summarise(
-    total_reported = max(Reported, na.rm = TRUE),
-    weighted_avg   = max(Avg, na.rm = TRUE),
-    method = "overall",
+    total_reported = if_else(any(is_overall), max(weight[is_overall], na.rm = TRUE), sum(weight, na.rm = TRUE)),
+    weighted_avg   = if_else(any(is_overall), max(Avg[is_overall], na.rm = TRUE),
+                             if_else(total_reported > 0, sum(Avg * weight, na.rm = TRUE) / total_reported, NA_real_)),
+    method = if_else(any(is_overall), "overall", "weighted_from_sections"),
     .groups = "drop"
-  )
-
-weighted_rows <- df_tmp %>%
-  group_by(Year, Session, Subject, Course) %>%
-  filter(!any(is_overall)) %>%
-  summarise(
-    total_reported = sum(Reported, na.rm = TRUE),
-    weighted_avg = if_else(
-      total_reported > 0,
-      sum(Avg * Reported, na.rm = TRUE) / total_reported,
-      NA_real_
-    ),
-    method = "weighted_from_sections",
-    .groups = "drop"
-  )
-
-df_all_2xx_weightedAvg <- bind_rows(overall_rows, weighted_rows) %>%
-  arrange(Year, Session, Subject, Course)
-
-# 
-df_course_term <- df_all_2xx_weightedAvg %>%
+  ) %>%
   mutate(
-    Course = as.character(Course),
     level = case_when(
       str_starts(Course, "2") ~ "200-level",
       str_starts(Course, "3") ~ "300-level",
       str_starts(Course, "4") ~ "400-level",
       TRUE ~ NA_character_
+    ),
+    period = case_when(
+      Year <= 2019 ~ "Pre",
+      Year >= 2022 ~ "Post",
+      TRUE ~ NA_character_
     )
   ) %>%
-  filter(!is.na(level))
+  filter(!is.na(level), !is.na(period)) %>%
+  arrange(Year, Session, Subject_std, Course)
 
-# Weighted avg by course/term/level
+# Helper
 
-df_term_subject_level_avg <- df_course_term %>%
-  group_by(Year, Session, Subject, level) %>%
-  summarise(
-    denom = sum(total_reported),
-    numer = sum(weighted_avg * total_reported),
-    avg_grade = numer / denom,
-    n_course = n(),
-    .groups = "drop"
-  ) %>%
-  select(-numer, -denom)
+summarise_term <- function(df, ...) {
+  df %>%
+    group_by(...) %>%
+    summarise(
+      denom = sum(total_reported),
+      numer = sum(weighted_avg * total_reported),
+      avg_grade = numer / denom,
+      n_course = n(),
+      .groups = "drop"
+    ) %>%
+    select(-numer, -denom) %>%
+    mutate(term_label = paste0(Year, Session))
+}
 
-df_term_subject_overall_avg <- df_course_term %>%
-  group_by(Year, Session, Subject) %>%
-  summarise(
-    denom = sum(total_reported),
-    numer = sum(weighted_avg * total_reported),
-    avg_grade = numer / denom,
-    n_course = n(),
-    .groups = "drop"
-  ) %>%
-  select(-numer, -denom)
+df_term_subject_overall_avg <- summarise_term(df_course_term, Year, Session, Subject_std) %>%
+  mutate(period = if_else(Year <= 2019, "Pre", "Post"))
 
-# Line chart
-
-df_term_subject_overall_avg <- df_term_subject_overall_avg %>%
-  mutate(
-    term_label = paste0(Year, Session)
-  )
-
-df_term_subject_level_avg <- df_term_subject_level_avg %>%
-  mutate(
-    term_label = paste0(Year, Session)
-  )
+df_term_subject_level_avg <- summarise_term(df_course_term, Year, Session, Subject_std, level) %>%
+  mutate(period = if_else(Year <= 2019, "Pre", "Post"))
 
 term_levels <- df_term_subject_overall_avg %>%
   distinct(Year, Session) %>%
@@ -154,117 +114,176 @@ term_levels <- df_term_subject_overall_avg %>%
   mutate(term_label = paste0(Year, Session)) %>%
   pull(term_label)
 
-df_term_subject_overall_avg$term_label <- factor(
-  df_term_subject_overall_avg$term_label,
-  levels = term_levels
-)
+set_term_factor <- function(df) {
+  df %>% mutate(term_label = factor(term_label, levels = term_levels))
+}
 
-df_term_subject_level_avg$term_label <- factor(
-  df_term_subject_level_avg$term_label,
-  levels = term_levels
-)
+df_term_subject_overall_avg <- set_term_factor(df_term_subject_overall_avg)
+df_term_subject_level_avg   <- set_term_factor(df_term_subject_level_avg)
 
-df_term_subject_overall_avg <- df_term_subject_overall_avg %>%
-  mutate(period = if_else(Year <= 2019, "Pre", "Post"))
+# Mann-Whitney U-test
 
-df_term_subject_level_avg <- df_term_subject_level_avg %>%
-  mutate(period = if_else(Year <= 2019, "Pre", "Post"))
+# All courses
 
-ggplot(df_term_subject_overall_avg,
-       aes(term_label, avg_grade,
-           color = Subject,
-           group = interaction(Subject, period))) +
-  
-  geom_line(size=1.2) +
-  geom_point(size=2) +
-  coord_cartesian(ylim=c(50,95)) +
-  labs(
-    title = "CHEM vs MATH Average Grades by Term",
-    x = "Academic Term",
-    y = "Average Grade (%)"
-  ) +
-  theme_minimal() +
-  theme(
-    plot.title = element_text(hjust=0.5, size=14, face="bold"),
-    axis.text.x = element_text(angle=45, hjust=1)
+wilcox_all <- wilcox.test(weighted_avg ~ period, data = df_course_term, exact = FALSE)
+
+df_desc_all <- df_course_term %>%
+  group_by(period) %>%
+  summarise(
+    median_grade = median(weighted_avg, na.rm = TRUE),
+    mean_grade   = mean(weighted_avg, na.rm = TRUE),
+    n_obs = n(),
+    .groups = "drop"
   )
 
-ggplot(
-  filter(df_term_subject_level_avg, Subject=="CHEM"),
-  aes(term_label, avg_grade,
-      color=level,
-      group=interaction(level, period))
-) +
-  geom_line(size=1.1) +
-  geom_point(size=2) +
-  coord_cartesian(ylim=c(50,95)) +
-  labs(
-    title = "CHEM Grades by Course Level",
-    x = "Academic Term",
-    y = "Average Grade (%)"
-  ) +
-  theme_minimal() +
-  theme(
-    plot.title = element_text(hjust=0.5, size=14, face="bold"),
-    axis.text.x = element_text(angle=45, hjust=1)
-  )
+# Level
 
-ggplot(
-  filter(df_term_subject_level_avg, Subject=="MATH"),
-  aes(term_label, avg_grade,
-      color=level,
-      group=interaction(level, period))
-) +
-  geom_line(size=1.1) +
-  geom_point(size=2) +
-  coord_cartesian(ylim=c(50,95)) +
-  labs(
-    title = "MATH Grades by Course Level",
-    x = "Academic Term",
-    y = "Average Grade (%)"
-  ) +
-  theme_minimal() +
-  theme(
-    plot.title = element_text(hjust=0.5, size=14, face="bold"),
-    axis.text.x = element_text(angle=45, hjust=1)
-  )
-
-# U test
-
-df_course_term <- df_course_term %>%
-  mutate(period = if_else(Year <= 2019, "Pre", "Post"))
-
-df_course_term %>%
-  filter(Subject=="MATH") %>%
-  count(period)
-
-df_course_term %>%
-  filter(Subject=="CHEM") %>%
-  count(period)
-
-df_course_term %>%
-  filter(Subject=="MATH") %>%
+wilcox_by_level <- df_course_term %>%
+  group_by(level) %>%
   wilcox_test(weighted_avg ~ period) %>%
   add_significance()
 
-df_course_term %>%
-  filter(Subject=="CHEM") %>%
+df_desc_by_level <- df_course_term %>%
+  group_by(level, period) %>%
+  summarise(
+    median_grade = median(weighted_avg, na.rm = TRUE),
+    mean_grade   = mean(weighted_avg, na.rm = TRUE),
+    n_obs        = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(level, period)
+
+# Subjects
+
+min_n_each_period <- 30
+
+# Check sample size
+
+subjects_ok <- df_course_term %>%
+  count(Subject_std, period) %>%
+  pivot_wider(names_from = period, values_from = n, values_fill = 0) %>%
+  filter(Pre >= min_n_each_period, Post >= min_n_each_period) %>%
+  pull(Subject_std)
+
+wilcox_by_subject <- df_course_term %>%
+  filter(Subject_std %in% subjects_ok) %>%
+  group_by(Subject_std) %>%
   wilcox_test(weighted_avg ~ period) %>%
-  add_significance()
+  add_significance() %>%
+  arrange(p)
 
-ggplot(filter(df_course_term, Subject=="MATH"),
-       aes(period, weighted_avg)) +
+# Subjects + Level
+
+# Check sample size
+
+cells_ok <- df_course_term %>%
+  count(Subject_std, level, period) %>%
+  pivot_wider(names_from = period, values_from = n, values_fill = 0) %>%
+  filter(Pre >= min_n_each_period, Post >= min_n_each_period) %>%
+  select(Subject_std, level)
+
+wilcox_by_subject_level <- df_course_term %>%
+  semi_join(cells_ok, by = c("Subject_std", "level")) %>%
+  group_by(Subject_std, level) %>%
+  wilcox_test(weighted_avg ~ period) %>%
+  add_significance() %>%
+  arrange(p)
+
+# Plots
+
+theme_si <- theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Line chart
+
+# All courses
+
+df_term_all_avg <- summarise_term(df_course_term, Year, Session) %>%
+  mutate(period = if_else(Year <= 2019, "Pre", "Post")) %>%
+  set_term_factor()
+
+ggplot(df_term_all_avg, aes(term_label, avg_grade, group = period)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  coord_cartesian(ylim = c(50, 95)) +
+  labs(title = "Average Grades by Term (All Courses)", x = "Academic Term", y = "Average Grade (%)") +
+  theme_si
+
+# Level
+
+df_term_level_avg <- summarise_term(df_course_term, Year, Session, level) %>%
+  mutate(period = if_else(Year <= 2019, "Pre", "Post")) %>%
+  set_term_factor()
+
+ggplot(df_term_level_avg, aes(term_label, avg_grade, color = level, group = interaction(level, period))) +
+  geom_line(size = 1.1) +
+  geom_point(size = 2) +
+  coord_cartesian(ylim = c(50, 95)) +
+  labs(title = "Average Grades by Term (200/300/400-level)", x = "Academic Term", y = "Average Grade (%)", color = "Course level") +
+  theme_si
+
+# Selected subjects
+
+subjects_keep <- c("MATH", "CHEM")
+df_plot_overall <- df_term_subject_overall_avg %>% filter(Subject_std %in% subjects_keep)
+df_density_plot <- df_course_term %>% filter(Subject_std %in% subjects_keep)
+
+ggplot(df_plot_overall, aes(term_label, avg_grade, color = Subject_std, group = interaction(Subject_std, period))) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  coord_cartesian(ylim = c(50, 95)) +
+  labs(title = "Average Grades by Term CHEM, MATH", x = "Academic Term", y = "Average Grade (%)") +
+  theme_si
+
+# Selected subject
+
+subject_focus <- "CHEM"
+ggplot(filter(df_term_subject_level_avg, Subject_std == subject_focus),
+       aes(term_label, avg_grade, color = level, group = interaction(level, period))) +
+  geom_line(size = 1.1) +
+  geom_point(size = 2) +
+  coord_cartesian(ylim = c(50, 95)) +
+  labs(title = paste0(subject_focus, " Grades by Course Level"), x = "Academic Term", y = "Average Grade (%)") +
+  theme_si
+
+# Distribution
+
+# All courses
+
+ggplot(df_course_term, aes(weighted_avg, fill = period)) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Distribution of Course-level Averages (All Levels)", x = "Course-level weighted average (%)", y = "Density") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+
+# Level
+
+ggplot(df_course_term, aes(weighted_avg, fill = period)) +
+  geom_density(alpha = 0.4) +
+  facet_wrap(~ level, ncol = 1) +
+  labs(title = "Distribution of Course-level Averages by Course Level", x = "Course-level weighted average (%)", y = "Density") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+
+# Selected subjects
+
+ggplot(df_density_plot, aes(weighted_avg, fill = period)) +
+  geom_density(alpha = 0.4) +
+  facet_wrap(~ Subject_std) +
+  labs(title = "Distribution of Course-level Averages", x = "Course-level weighted average (%)", y = "Density") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+
+# Boxplot
+
+# Selected subjects
+
+ggplot(df_density_plot, aes(period, weighted_avg)) +
   geom_boxplot() +
-  labs(title="MATH Pre vs Post (Course-level averages)",
-       x="Period", y="Average Grade")
-
-ggplot(filter(df_course_term, Subject=="CHEM"),
-       aes(period, weighted_avg)) +
-  geom_boxplot() +
-  labs(title="CHEM Pre vs Post (Course-level averages)",
-       x="Period", y="Average Grade")
-
-ggplot(df_course_term,
-       aes(weighted_avg, fill=period)) +
-  geom_density(alpha=0.4) +
-  facet_wrap(~Subject)
+  facet_wrap(~ Subject_std) +
+  labs(title = "Pre vs Post (Course-level averages)", x = "Period", y = "Course-level weighted average (%)") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
