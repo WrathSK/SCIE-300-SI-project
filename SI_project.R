@@ -4,6 +4,7 @@ library(stringr)
 library(ggplot2)
 library(rstatix)
 library(tidyr)
+library(gt)
 
 # List all csv files
 
@@ -208,8 +209,8 @@ df_term_all_avg <- summarise_term(df_course_term, Year, Session) %>%
 ggplot(df_term_all_avg, aes(term_label, avg_grade, group = period)) +
   geom_line(size = 1.2) +
   geom_point(size = 2) +
-  coord_cartesian(ylim = c(50, 95)) +
-  labs(title = "Average Grades by Term (All Courses)", x = "Academic Term", y = "Average Grade (%)") +
+  coord_cartesian(ylim = c(70, 85)) +
+  labs(title = NULL, x = "Academic Term", y = "Average Grade (%)") +
   theme_si
 
 # Level
@@ -221,33 +222,33 @@ df_term_level_avg <- summarise_term(df_course_term, Year, Session, level) %>%
 ggplot(df_term_level_avg, aes(term_label, avg_grade, color = level, group = interaction(level, period))) +
   geom_line(size = 1.1) +
   geom_point(size = 2) +
-  coord_cartesian(ylim = c(50, 95)) +
-  labs(title = "Average Grades by Term (200/300/400-level)", x = "Academic Term", y = "Average Grade (%)", color = "Course level") +
+  coord_cartesian(ylim = c(70, 85)) +
+  labs(title = NULL, x = "Academic Term", y = "Average Grade (%)", color = "Course level") +
   theme_si
 
 # Selected subjects
 
-subjects_keep <- c("MATH", "CHEM")
-df_plot_overall <- df_term_subject_overall_avg %>% filter(Subject_std %in% subjects_keep)
-df_density_plot <- df_course_term %>% filter(Subject_std %in% subjects_keep)
+# subjects_keep <- c("MATH", "CHEM")
+# df_plot_overall <- df_term_subject_overall_avg %>% filter(Subject_std %in% subjects_keep)
+# df_density_plot <- df_course_term %>% filter(Subject_std %in% subjects_keep)
 
-ggplot(df_plot_overall, aes(term_label, avg_grade, color = Subject_std, group = interaction(Subject_std, period))) +
-  geom_line(size = 1.2) +
-  geom_point(size = 2) +
-  coord_cartesian(ylim = c(50, 95)) +
-  labs(title = "Average Grades by Term CHEM, MATH", x = "Academic Term", y = "Average Grade (%)") +
-  theme_si
+# ggplot(df_plot_overall, aes(term_label, avg_grade, color = Subject_std, group = interaction(Subject_std, period))) +
+#   geom_line(size = 1.2) +
+#   geom_point(size = 2) +
+#   coord_cartesian(ylim = c(50, 95)) +
+#   labs(title = NULL, x = "Academic Term", y = "Average Grade (%)") +
+#   theme_si
 
-# Selected subject
+# Selected subject + level
 
-subject_focus <- "CHEM"
-ggplot(filter(df_term_subject_level_avg, Subject_std == subject_focus),
-       aes(term_label, avg_grade, color = level, group = interaction(level, period))) +
-  geom_line(size = 1.1) +
-  geom_point(size = 2) +
-  coord_cartesian(ylim = c(50, 95)) +
-  labs(title = paste0(subject_focus, " Grades by Course Level"), x = "Academic Term", y = "Average Grade (%)") +
-  theme_si
+# subject_focus <- "CHEM"
+# ggplot(filter(df_term_subject_level_avg, Subject_std == subject_focus),
+#        aes(term_label, avg_grade, color = level, group = interaction(level, period))) +
+#   geom_line(size = 1.1) +
+#   geom_point(size = 2) +
+#   coord_cartesian(ylim = c(50, 95)) +
+#   labs(title = NULL, x = "Academic Term", y = "Average Grade (%)") +
+#   theme_si
 
 # Distribution
 
@@ -255,7 +256,7 @@ ggplot(filter(df_term_subject_level_avg, Subject_std == subject_focus),
 
 ggplot(df_course_term, aes(weighted_avg, fill = period)) +
   geom_density(alpha = 0.4) +
-  labs(title = "Distribution of Course-level Averages (All Levels)", x = "Course-level weighted average (%)", y = "Density") +
+  labs(title = NULL, x = "Course-level weighted average (%)", y = "Density") +
   theme_minimal() +
   theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
 
@@ -264,26 +265,26 @@ ggplot(df_course_term, aes(weighted_avg, fill = period)) +
 ggplot(df_course_term, aes(weighted_avg, fill = period)) +
   geom_density(alpha = 0.4) +
   facet_wrap(~ level, ncol = 1) +
-  labs(title = "Distribution of Course-level Averages by Course Level", x = "Course-level weighted average (%)", y = "Density") +
+  labs(title = NULL, x = "Course-level weighted average (%)", y = "Density") +
   theme_minimal() +
   theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
 
 # Selected subjects
 
-ggplot(df_density_plot, aes(weighted_avg, fill = period)) +
-  geom_density(alpha = 0.4) +
-  facet_wrap(~ Subject_std) +
-  labs(title = "Distribution of Course-level Averages", x = "Course-level weighted average (%)", y = "Density") +
-  theme_minimal() +
-  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+# ggplot(df_density_plot, aes(weighted_avg, fill = period)) +
+#   geom_density(alpha = 0.4) +
+#   facet_wrap(~ Subject_std) +
+#   labs(title = NULL, x = "Course-level weighted average (%)", y = "Density") +
+#   theme_minimal() +
+#   theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
 
 # Boxplot
 
 # Selected subjects
 
-ggplot(df_density_plot, aes(period, weighted_avg)) +
-  geom_boxplot() +
-  facet_wrap(~ Subject_std) +
-  labs(title = "Pre vs Post (Course-level averages)", x = "Period", y = "Course-level weighted average (%)") +
-  theme_minimal() +
-  theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+# ggplot(df_density_plot, aes(period, weighted_avg)) +
+#   geom_boxplot() +
+#   facet_wrap(~ Subject_std) +
+#   labs(title = NULL, x = "Period", y = "Course-level weighted average (%)") +
+#   theme_minimal() +
+#   theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
