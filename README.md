@@ -1,4 +1,4 @@
-# SCIE 300 Statistical Inquiry Project
+# SCIE 300 SI Project
 
 
 The project investigates changes in course grade distributions at UBC across different academic periods, with a particular focus on the impact of COVID-19 and post-pandemic instructional modes.
