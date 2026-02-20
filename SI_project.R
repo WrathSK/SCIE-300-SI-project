@@ -397,7 +397,7 @@ gt_booktabs <- function(gt_obj) {
     )
 }
 
-# Table - wilcox_all + wilcox_by_level
+# Table 1 - wilcox_all + wilcox_by_level
 
 wilcox_all_tbl <- tibble(
   level = "Overall",
@@ -441,7 +441,7 @@ gtsave(
   zoom = 2
 )
 
-# Table - Post/Pre Avg
+# Table 2 - Post/Pre Avg
 
 df_desc_all_tbl <- df_desc_all %>%
   mutate(level = "Overall") %>%
@@ -460,19 +460,14 @@ df_desc_overall_level_tbl <- bind_rows(df_desc_all_tbl, df_desc_by_level_tbl) %>
     stat = recode(stat,
                   median_grade = "Median",
                   mean_grade = "Mean"),
-    row_name = paste(level, stat, sep = " - ")
+    row_name = paste(level, stat, sep = " - "),
+    period = factor(period, levels = c("Pre", "Post"))  # <- FORCE ORDER
   ) %>%
   select(row_name, period, value) %>%
   pivot_wider(
     names_from = period,
     values_from = value
-  ) %>%
-  arrange(factor(row_name, levels = c(
-    "Overall - Median", "Overall - Mean",
-    "200-level - Median", "200-level - Mean",
-    "300-level - Median", "300-level - Mean",
-    "400-level - Median", "400-level - Mean"
-  )))
+  )
 
 gt_desc_overall_level <- df_desc_overall_level_tbl %>%
   gt(rowname_col = "row_name") %>%
@@ -481,3 +476,56 @@ gt_desc_overall_level <- df_desc_overall_level_tbl %>%
   gt_booktabs()
 
 gtsave(gt_desc_overall_level, "Table_Desc_Overall_Level.png")
+
+# Table 3 - wilcox by subject
+
+wilcox_by_subject_tbl <- wilcox_by_subject %>%
+  transmute(
+    Subject = Subject_std,
+    `p-value` = p,
+    m = m,
+    `alpha (FWER)` = alpha_fwer,
+    `is Significant?` = if_else(significant_fwer, "Yes", "No")
+  )
+
+gt_wilcox_by_subject <- wilcox_by_subject_tbl %>%
+  gt() %>%
+  fmt(columns = c(`p-value`, `alpha (FWER)`), fns = function(x) sprintf("%.2e", x)) %>%
+  gt_booktabs()
+
+gtsave(
+  gt_wilcox_by_subject,
+  "Table_Utest_By_Subject.png",
+  vwidth = 1200, vheight = 1600, zoom = 2
+)
+
+# Table 4 - Pre/Post Avg by subjects
+
+df_desc_subjects_tbl <- df_desc_subjects %>%
+  transmute(
+    Subject = Subject_std,
+    `Median (Pre)` = median_grade_Pre,
+    `Median (Post)` = median_grade_Post,
+    `Δ Median` = delta_median,
+    `Mean (Pre)` = mean_grade_Pre,
+    `Mean (Post)` = mean_grade_Post,
+    `Δ Mean` = delta_mean,
+    `n (Pre)` = n_obs_Pre,
+    `n (Post)` = n_obs_Post,
+    `Increasing?` = if_else(increasing, "Yes", "No")
+  )
+
+gt_desc_subjects <- df_desc_subjects_tbl %>%
+  gt() %>%
+  fmt_number(
+    columns = c(`Median (Pre)`, `Median (Post)`, `Δ Median`,
+                `Mean (Pre)`, `Mean (Post)`, `Δ Mean`),
+    decimals = 2
+  ) %>%
+  gt_booktabs()
+
+gtsave(
+  gt_desc_subjects,
+  "Table_Desc_Significant_Subjects.png",
+  vwidth = 1400, vheight = 1600, zoom = 2
+)
