@@ -263,6 +263,43 @@ ggplot(df_term_level_avg, aes(term_label, avg_grade, color = level, group = inte
   labs(title = NULL, x = "Academic Term", y = "Average Grade (%)", color = "Course level") +
   theme_si
 
+# Combined Overall + Levels
+
+df_plot_overall <- df_term_all_avg %>%
+  transmute(
+    term_label, avg_grade, period,
+    series = "Overall",
+    series_type = "Overall"
+  )
+
+df_plot_level <- df_term_level_avg %>%
+  transmute(
+    term_label, avg_grade, period,
+    series = level,
+    series_type = "Level"
+  )
+
+df_plot_combined <- bind_rows(df_plot_overall, df_plot_level)
+
+ggplot(df_plot_combined,
+       aes(term_label, avg_grade, group = interaction(series, period))) +
+  geom_line(aes(color = series, linetype = series_type), size = 1.1) +
+  geom_point(aes(color = series, shape = series_type), size = 2) +
+  scale_linetype_manual(values = c(Overall = "dashed", Level = "solid")) +
+  scale_shape_manual(values = c(Overall = 17, Level = 16)) + 
+  scale_color_manual(
+    values = c(
+      "Overall" = "black",
+      "200-level" = "#1b9e77",
+      "300-level" = "#d95f02",
+      "400-level" = "#7570b3"
+    ),
+    breaks = c("Overall", "200-level", "300-level", "400-level")
+  ) +
+  coord_cartesian(ylim = c(70, 85)) +
+  labs(title = NULL, x = "Academic Term", y = "Average Grade (%)", color = "Series") +
+  theme_si
+
 # Selected subjects
 
 # subjects_keep <- c("MATH", "CHEM")
@@ -325,3 +362,122 @@ ggplot(df_course_term, aes(weighted_avg, fill = period)) +
 #   labs(title = NULL, x = "Period", y = "Course-level weighted average (%)") +
 #   theme_minimal() +
 #   theme(plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+
+# gt styling helper
+
+gt_booktabs <- function(gt_obj) {
+  gt_obj %>%
+    opt_table_lines(extent = "none") %>%
+    tab_options(
+      table.border.left.style = "none",
+      table.border.right.style = "none",
+      
+      table.border.top.style = "solid",
+      table.border.top.width = px(2),
+      table.border.bottom.style = "solid",
+      table.border.bottom.width = px(2),
+      
+      column_labels.border.top.style = "none",
+      column_labels.border.bottom.style = "solid",
+      column_labels.border.bottom.width = px(2),
+      
+      table_body.border.top.style = "none",
+      table_body.border.bottom.style = "none",
+      
+      table.font.size = px(13)   # ← smaller font
+    ) %>%
+    tab_style(
+      style = cell_borders(sides = c("left", "right"),
+                           color = "transparent",
+                           weight = px(0)),
+      locations = list(
+        cells_body(columns = everything()),
+        cells_column_labels(columns = everything())
+      )
+    )
+}
+
+# Table - wilcox_all + wilcox_by_level
+
+wilcox_all_tbl <- tibble(
+  level = "Overall",
+  p = wilcox_all$p.value
+) %>%
+  mutate(
+    m = 1,
+    alpha_fwer = 0.05,
+    is_significant = p < alpha_fwer
+  )
+
+wilcox_by_level_tbl <- wilcox_by_level %>%
+  transmute(
+    level = level,
+    p = p,
+    m = m,
+    alpha_fwer = alpha_fwer,
+    is_significant = significant_fwer
+  )
+
+wilcox_overall_level_tbl <- bind_rows(wilcox_all_tbl, wilcox_by_level_tbl) %>%
+  mutate(is_significant = if_else(is_significant, "Yes", "No"))
+
+gt_wilcox_overall_level <- wilcox_overall_level_tbl %>%
+  gt() %>%
+  fmt(columns = c(p, alpha_fwer), fns = function(x) sprintf("%.2e", x)) %>%
+  cols_label(
+    level = "Test",
+    p = "p-value",
+    m = "m",
+    alpha_fwer = "alpha (FWER)",
+    is_significant = "is Significant?"
+  ) %>%
+  gt_booktabs()
+
+gtsave(
+  gt_wilcox_overall_level,
+  "Table_Utest_Overall_Level.png",
+  vwidth = 900,
+  vheight = 500,
+  zoom = 2
+)
+
+# Table - Post/Pre Avg
+
+df_desc_all_tbl <- df_desc_all %>%
+  mutate(level = "Overall") %>%
+  select(level, period, median_grade, mean_grade)
+
+df_desc_by_level_tbl <- df_desc_by_level %>%
+  select(level, period, median_grade, mean_grade)
+
+df_desc_overall_level_tbl <- bind_rows(df_desc_all_tbl, df_desc_by_level_tbl) %>%
+  pivot_longer(
+    cols = c(median_grade, mean_grade),
+    names_to = "stat",
+    values_to = "value"
+  ) %>%
+  mutate(
+    stat = recode(stat,
+                  median_grade = "Median",
+                  mean_grade = "Mean"),
+    row_name = paste(level, stat, sep = " - ")
+  ) %>%
+  select(row_name, period, value) %>%
+  pivot_wider(
+    names_from = period,
+    values_from = value
+  ) %>%
+  arrange(factor(row_name, levels = c(
+    "Overall - Median", "Overall - Mean",
+    "200-level - Median", "200-level - Mean",
+    "300-level - Median", "300-level - Mean",
+    "400-level - Median", "400-level - Mean"
+  )))
+
+gt_desc_overall_level <- df_desc_overall_level_tbl %>%
+  gt(rowname_col = "row_name") %>%
+  fmt_number(columns = c(Pre, Post), decimals = 2) %>%
+  cols_label(Pre = "Pre", Post = "Post") %>%
+  gt_booktabs()
+
+gtsave(gt_desc_overall_level, "Table_Desc_Overall_Level.png")
