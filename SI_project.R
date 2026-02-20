@@ -142,7 +142,12 @@ df_desc_all <- df_course_term %>%
 wilcox_by_level <- df_course_term %>%
   group_by(level) %>%
   wilcox_test(weighted_avg ~ period) %>%
-  add_significance()
+  ungroup() %>%
+  mutate(
+    m = 3,
+    alpha_fwer = 0.05 / m,
+    significant_fwer = p < alpha_fwer
+  )
 
 df_desc_by_level <- df_course_term %>%
   group_by(level, period) %>%
@@ -166,12 +171,44 @@ subjects_ok <- df_course_term %>%
   filter(Pre >= min_n_each_period, Post >= min_n_each_period) %>%
   pull(Subject_std)
 
+m_subject <- length(subjects_ok)
+alpha_subject_fwer <- 0.05 / m_subject
+
 wilcox_by_subject <- df_course_term %>%
   filter(Subject_std %in% subjects_ok) %>%
   group_by(Subject_std) %>%
   wilcox_test(weighted_avg ~ period) %>%
-  add_significance() %>%
+  ungroup() %>%
+  mutate(
+    m = m_subject,
+    alpha_fwer = alpha_subject_fwer,
+    significant_fwer = p < alpha_fwer
+  ) %>%
   arrange(p)
+
+sig_subjects <- wilcox_by_subject %>%
+  filter(significant_fwer) %>%
+  pull(Subject_std)
+
+df_desc_subjects <- df_course_term %>%
+  filter(Subject_std %in% sig_subjects) %>%
+  group_by(Subject_std, period) %>%
+  summarise(
+    median_grade = median(weighted_avg, na.rm = TRUE),
+    mean_grade   = mean(weighted_avg, na.rm = TRUE),
+    n_obs        = n(),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = period,
+    values_from = c(median_grade, mean_grade, n_obs)
+  ) %>%
+  mutate(
+    delta_median = median_grade_Post - median_grade_Pre,
+    delta_mean   = mean_grade_Post - mean_grade_Pre,
+    increasing   = delta_median > 0
+  ) %>%
+  arrange(desc(delta_median))
 
 # Subjects + Level
 
