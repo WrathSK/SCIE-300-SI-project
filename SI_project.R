@@ -384,12 +384,14 @@ gt_booktabs <- function(gt_obj) {
       table_body.border.top.style = "none",
       table_body.border.bottom.style = "none",
       
-      table.font.size = px(13)   # ← smaller font
+      table.font.size = px(13)
     ) %>%
     tab_style(
-      style = cell_borders(sides = c("left", "right"),
-                           color = "transparent",
-                           weight = px(0)),
+      style = cell_borders(
+        sides = c("left", "right"),
+        color = "transparent",
+        weight = px(0)
+      ),
       locations = list(
         cells_body(columns = everything()),
         cells_column_labels(columns = everything())
@@ -397,12 +399,30 @@ gt_booktabs <- function(gt_obj) {
     )
 }
 
+pre_lab  <- "Pre-COVID"
+post_lab <- "Post-COVID"
+
 # Table 1 - wilcox_all + wilcox_by_level
+
+n_overall_by_period <- df_course_term %>%
+  count(period, name = "n_obs") %>%
+  mutate(period = factor(period, levels = c("Pre", "Post"))) %>%
+  pivot_wider(names_from = period, values_from = n_obs) %>%
+  transmute(`n (Pre-COVID)` = Pre, `n (Post-COVID)` = Post)
+
+n_level_by_period <- df_course_term %>%
+  count(level, period, name = "n_obs") %>%
+  mutate(period = factor(period, levels = c("Pre", "Post"))) %>%
+  pivot_wider(names_from = period, values_from = n_obs) %>%
+  transmute(level,
+            `n (Pre-COVID)` = Pre,
+            `n (Post-COVID)` = Post)
 
 wilcox_all_tbl <- tibble(
   level = "Overall",
   p = wilcox_all$p.value
 ) %>%
+  bind_cols(n_overall_by_period) %>%
   mutate(
     m = 1,
     alpha_fwer = 0.05,
@@ -410,11 +430,14 @@ wilcox_all_tbl <- tibble(
   )
 
 wilcox_by_level_tbl <- wilcox_by_level %>%
+  left_join(n_level_by_period, by = "level") %>%
   transmute(
-    level = level,
-    p = p,
-    m = m,
-    alpha_fwer = alpha_fwer,
+    level,
+    `n (Pre-COVID)`,
+    `n (Post-COVID)`,
+    p,
+    m,
+    alpha_fwer,
     is_significant = significant_fwer
   )
 
@@ -426,66 +449,90 @@ gt_wilcox_overall_level <- wilcox_overall_level_tbl %>%
   fmt(columns = c(p, alpha_fwer), fns = function(x) sprintf("%.2e", x)) %>%
   cols_label(
     level = "Test",
+    `n (Pre-COVID)` = pre_lab,
+    `n (Post-COVID)` = post_lab,
     p = "p-value",
     m = "m",
     alpha_fwer = "alpha (FWER)",
-    is_significant = "is Significant?"
+    is_significant = "Significant (FWER)?"
   ) %>%
   gt_booktabs()
 
 gtsave(
   gt_wilcox_overall_level,
   "Table_Utest_Overall_Level.png",
-  vwidth = 900,
-  vheight = 500,
-  zoom = 2
+  vwidth = 900, vheight = 500, zoom = 2
 )
 
 # Table 2 - Post/Pre Avg
 
 df_desc_all_tbl <- df_desc_all %>%
   mutate(level = "Overall") %>%
-  select(level, period, median_grade, mean_grade)
+  select(level, period, median_grade, mean_grade, n_obs)
 
 df_desc_by_level_tbl <- df_desc_by_level %>%
-  select(level, period, median_grade, mean_grade)
+  select(level, period, median_grade, mean_grade, n_obs)
 
 df_desc_overall_level_tbl <- bind_rows(df_desc_all_tbl, df_desc_by_level_tbl) %>%
   pivot_longer(
-    cols = c(median_grade, mean_grade),
+    cols = c(median_grade, mean_grade, n_obs),
     names_to = "stat",
     values_to = "value"
   ) %>%
   mutate(
     stat = recode(stat,
                   median_grade = "Median",
-                  mean_grade = "Mean"),
+                  mean_grade = "Mean",
+                  n_obs = "n"),
     row_name = paste(level, stat, sep = " - "),
-    period = factor(period, levels = c("Pre", "Post"))  # <- FORCE ORDER
+    period = factor(period, levels = c("Pre", "Post"))
   ) %>%
   select(row_name, period, value) %>%
-  pivot_wider(
-    names_from = period,
-    values_from = value
-  )
+  pivot_wider(names_from = period, values_from = value) %>%
+  select(row_name, Pre, Post)
 
 gt_desc_overall_level <- df_desc_overall_level_tbl %>%
   gt(rowname_col = "row_name") %>%
-  fmt_number(columns = c(Pre, Post), decimals = 2) %>%
-  cols_label(Pre = "Pre", Post = "Post") %>%
+  cols_label(Pre = pre_lab, Post = post_lab) %>%
+  fmt_number(
+    columns = c(Pre, Post),
+    rows = !grepl(" - n$", row_name),
+    decimals = 2
+  ) %>%
+  fmt_number(
+    columns = c(Pre, Post),
+    rows = grepl(" - n$", row_name),
+    decimals = 0
+  ) %>%
   gt_booktabs()
 
-gtsave(gt_desc_overall_level, "Table_Desc_Overall_Level.png")
+gtsave(
+  gt_desc_overall_level,
+  "Table_Desc_Overall_Level.png",
+  vwidth = 900, vheight = 550, zoom = 2
+)
 
 # Table 3 - wilcox by subject
 
+n_subject_by_period <- df_course_term %>%
+  filter(Subject_std %in% subjects_ok) %>%
+  count(Subject_std, period, name = "n_obs") %>%
+  mutate(period = factor(period, levels = c("Pre", "Post"))) %>%
+  pivot_wider(names_from = period, values_from = n_obs) %>%
+  transmute(Subject_std,
+            `n (Pre-COVID)` = Pre,
+            `n (Post-COVID)` = Post)
+
 wilcox_by_subject_tbl <- wilcox_by_subject %>%
+  left_join(n_subject_by_period, by = "Subject_std") %>%
   transmute(
     Subject = Subject_std,
+    `n (Pre-COVID)`,
+    `n (Post-COVID)`,
     `p-value` = p,
     m = m,
     `alpha (FWER)` = alpha_fwer,
-    `is Significant?` = if_else(significant_fwer, "Yes", "No")
+    `Significant (FWER)?` = if_else(significant_fwer, "Yes", "No")
   )
 
 gt_wilcox_by_subject <- wilcox_by_subject_tbl %>%
@@ -504,22 +551,26 @@ gtsave(
 df_desc_subjects_tbl <- df_desc_subjects %>%
   transmute(
     Subject = Subject_std,
-    `Median (Pre)` = median_grade_Pre,
-    `Median (Post)` = median_grade_Post,
+    
+    `n (Pre-COVID)` = n_obs_Pre,
+    `n (Post-COVID)` = n_obs_Post,
+    
+    `Median (Pre-COVID)` = median_grade_Pre,
+    `Median (Post-COVID)` = median_grade_Post,
     `Δ Median` = delta_median,
-    `Mean (Pre)` = mean_grade_Pre,
-    `Mean (Post)` = mean_grade_Post,
-    `Δ Mean` = delta_mean,
-    `n (Pre)` = n_obs_Pre,
-    `n (Post)` = n_obs_Post,
-    `Increasing?` = if_else(increasing, "Yes", "No")
+    
+    `Mean (Pre-COVID)` = mean_grade_Pre,
+    `Mean (Post-COVID)` = mean_grade_Post,
+    `Δ Mean` = delta_mean
   )
 
 gt_desc_subjects <- df_desc_subjects_tbl %>%
   gt() %>%
   fmt_number(
-    columns = c(`Median (Pre)`, `Median (Post)`, `Δ Median`,
-                `Mean (Pre)`, `Mean (Post)`, `Δ Mean`),
+    columns = c(
+      `Median (Pre-COVID)`, `Median (Post-COVID)`, `Δ Median`,
+      `Mean (Pre-COVID)`, `Mean (Post-COVID)`, `Δ Mean`
+    ),
     decimals = 2
   ) %>%
   gt_booktabs()
